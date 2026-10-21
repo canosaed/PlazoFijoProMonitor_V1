@@ -26,6 +26,7 @@ const COMMON_BANKS = [
   'Banco Supervielle',
   'Ualá (Compañía Financiera)',
   'Mercado Pago (Fondo Común)',
+  'Naranja X (Fondo Común)',
   'Otra Entidad Financiera'
 ];
 
@@ -202,7 +203,7 @@ export const DepositFormModal: React.FC<DepositFormModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-primary/40 backdrop-blur-xs p-4 overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-primary/40 backdrop-blur-xs p-4 overflow-y-auto" style={{ display: 'flex', flexWrap: 'wrap' }}>
       <div className="bg-surface-container-lowest w-full max-w-2xl rounded-2xl shadow-xl border border-outline-variant/30 overflow-hidden my-8">
         {/* Header */}
         <div className="flex items-center justify-between px-space-lg py-4 bg-primary text-on-primary">
@@ -438,8 +439,8 @@ export const DepositFormModal: React.FC<DepositFormModalProps> = ({
             />
           </div>
 
-          <div className="flex items-center justify-between pt-2 border-t border-outline-variant/20">
-            <label className="flex items-center gap-2 text-label-sm text-on-surface-variant cursor-pointer">
+          <div className="flex items-center justify-between pt-2 border-t border-outline-variant/20" style={{ display: 'flex', flexWrap: 'wrap' }}>
+            <label className="flex items-center gap-2 text-label-sm text-on-surface-variant cursor-pointer" style={{ display: 'flex', flexWrap: 'wrap' }}>
               <input
                 type="checkbox"
                 checked={isDemo}
@@ -449,7 +450,7 @@ export const DepositFormModal: React.FC<DepositFormModalProps> = ({
               <span>Marcar como Registro de Demostración</span>
             </label>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 mt-4">
               <button
                 type="button"
                 onClick={onClose}
