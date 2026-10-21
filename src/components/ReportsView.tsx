@@ -1,19 +1,33 @@
-import React, { useState } from 'react';
-import { FixedDeposit, BackupData } from '../types';
+import React, { useState, useEffect } from 'react';
+import { FixedDeposit, BackupData, BackupValidationResult } from '../types';
 import { formatCurrencyARS, formatDateAR, calculateFinancialSummary } from '../utils/financial';
-import { exportBackupJSON, restoreBackupJSON } from '../services/db';
+import {
+  exportBackupJSON,
+  restoreBackupJSON,
+  validateBackupJSON,
+  getLastBackupDate
+} from '../services/db';
+import {
+  getStorageEstimateInfo,
+  requestPersistentStorage,
+  shareBackupFile,
+  StorageEstimateInfo
+} from '../utils/pwa';
+import { RestoreModal } from './RestoreModal';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import { 
   FileText, 
   Download, 
-  Upload, 
   ShieldAlert, 
   CheckCircle2, 
   FileSpreadsheet, 
   Database,
-  RefreshCw,
+  Share2,
+  HardDrive,
+  Lock,
+  Clock,
   Info
 } from 'lucide-react';
 
@@ -26,7 +40,38 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   deposits,
   onDataRestored,
 }) => {
-  const [isRestoring, setIsRestoring] = useState<boolean>(false);
+  const [storageInfo, setStorageInfo] = useState<StorageEstimateInfo | null>(null);
+  const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
+  const [canShareFile, setCanShareFile] = useState<boolean>(false);
+
+  // Modal restore states
+  const [pendingBackupData, setPendingBackupData] = useState<BackupData | null>(null);
+  const [pendingValidation, setPendingValidation] = useState<BackupValidationResult | null>(null);
+  const [isRestoreModalOpen, setIsRestoreModalOpen] = useState<boolean>(false);
+
+  const refreshStorageAndBackupInfo = async () => {
+    const info = await getStorageEstimateInfo();
+    setStorageInfo(info);
+    const dateStr = await getLastBackupDate();
+    setLastBackupAt(dateStr);
+  };
+
+  useEffect(() => {
+    refreshStorageAndBackupInfo();
+    if (typeof navigator !== 'undefined' && 'share' in navigator && 'canShare' in navigator) {
+      setCanShareFile(true);
+    }
+  }, []);
+
+  const handleRequestPersistence = async () => {
+    const granted = await requestPersistentStorage();
+    if (granted) {
+      alert('Almacenamiento persistente concedido por el navegador.');
+    } else {
+      alert('El navegador no pudo conceder almacenamiento persistente en este momento. La app continuará funcionando con almacenamiento estándar.');
+    }
+    await refreshStorageAndBackupInfo();
+  };
 
   // 1. Export CSV
   const handleExportCSV = () => {
@@ -80,48 +125,75 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   };
 
   // 3. Export JSON Backup
-  const handleExportBackup = async () => {
-    const backup = await exportBackupJSON();
-    const jsonStr = JSON.stringify(backup, null, 2);
-    const blob = new Blob([jsonStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `backup_plazos_fijos_pro_${new Date().toISOString().split('T')[0]}.json`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const handleExportBackup = async (action: 'download' | 'share' = 'download') => {
+    try {
+      const backup = await exportBackupJSON();
+      const jsonStr = JSON.stringify(backup, null, 2);
+      const filename = `backup_plazos_fijos_pro_${new Date().toISOString().split('T')[0]}.json`;
+
+      if (action === 'share') {
+        const shared = await shareBackupFile(jsonStr, filename);
+        if (shared) {
+          await refreshStorageAndBackupInfo();
+          return;
+        }
+      }
+
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      await refreshStorageAndBackupInfo();
+    } catch (err) {
+      console.error('Error al generar respaldo:', err);
+      alert('Ocurrió un error al generar el archivo de respaldo.');
+    }
   };
 
-  // 4. Restore JSON Backup
-  const handleRestoreBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // 4. File Selected -> Pre-validate JSON Backup
+  const handleFileSelectForRestore = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!window.confirm('¡ATENCIÓN! La restauración reemplazará TODOS los datos almacenados en su navegador por la información del archivo de respaldo. ¿Desea continuar?')) {
+    if (file.size > 20 * 1024 * 1024) {
+      alert('El archivo seleccionado excede el tamaño máximo permitido (20 MB).');
       return;
     }
 
-    setIsRestoring(true);
     const reader = new FileReader();
-    reader.onload = async (evt) => {
+    reader.onload = (evt) => {
       try {
         const content = evt.target?.result as string;
-        const parsed: BackupData = JSON.parse(content);
-        const res = await restoreBackupJSON(parsed);
-        await onDataRestored();
-        alert(`Restauración completada. Se importaron ${res.importedDeposits} colocaciones e historial.`);
+        const parsed = JSON.parse(content);
+        const validationResult = validateBackupJSON(parsed);
+
+        setPendingBackupData(parsed);
+        setPendingValidation(validationResult);
+        setIsRestoreModalOpen(true);
       } catch (err) {
-        console.error('Error al restaurar respaldo:', err);
-        alert('Error: El archivo de respaldo seleccionado no tiene un formato JSON válido.');
+        console.error('Error al leer archivo JSON:', err);
+        alert('Error: El archivo seleccionado no es un archivo JSON válido.');
       } finally {
-        setIsRestoring(false);
+        // Reset file input so same file can be selected again
+        e.target.value = '';
       }
     };
     reader.readAsText(file);
   };
 
-  // 5. PDF Executive Report Generation
+  // 5. Confirm Execution from Modal
+  const handleConfirmRestoreFromModal = async (data: BackupData, mode: 'REPLACE' | 'MERGE') => {
+    const res = await restoreBackupJSON(data, mode);
+    await onDataRestored();
+    await refreshStorageAndBackupInfo();
+    alert(`Restauración completada con éxito. Se procesaron ${res.importedDeposits} inversiones e historial.`);
+  };
+
+  // 6. PDF Executive Report Generation
   const handleGeneratePDF = () => {
     const doc = new jsPDF();
     const summary = calculateFinancialSummary(deposits);
@@ -210,6 +282,42 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
         </div>
       </div>
 
+      {/* Storage & Persistence Status Banner */}
+      {storageInfo && storageInfo.supported && (
+        <div className="bg-surface-container-low p-4 rounded-xl border border-outline-variant/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <HardDrive className="w-5 h-5 text-secondary shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-bold text-primary text-body-md">Almacenamiento Local IndexedDB</span>
+                {storageInfo.isPersisted ? (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-label-sm font-bold bg-emerald-100 text-emerald-800">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Persistente
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-label-sm font-bold bg-amber-100 text-amber-800">
+                    Estándar
+                  </span>
+                )}
+              </div>
+              <p className="text-label-sm text-on-surface-variant">
+                Ocupado: <span className="font-semibold text-primary">{storageInfo.usageMB} MB</span> de{' '}
+                <span className="font-semibold text-primary">{storageInfo.quotaMB} MB</span> asignados ({storageInfo.percentUsed}%).
+              </p>
+            </div>
+          </div>
+
+          {!storageInfo.isPersisted && (
+            <button
+              onClick={handleRequestPersistence}
+              className="px-3 py-1.5 bg-surface-container hover:bg-surface-container-high text-primary font-bold rounded-lg border border-outline-variant/30 text-label-md transition-colors shrink-0"
+            >
+              Solicitar Almacenamiento Persistente
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Reports & Export Cards */}
         <div className="bg-surface-container-lowest p-space-lg rounded-xl shadow-sm border border-outline-variant/30 space-y-4">
@@ -278,17 +386,37 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
             Guarde una copia exacta de sus inversiones e historial para migrar de equipo o proteger sus datos.
           </p>
 
+          {/* Last backup info */}
+          <div className="flex items-center gap-2 text-label-sm text-on-surface-variant bg-surface-container-low p-2.5 rounded-lg border border-outline-variant/20">
+            <Clock className="w-4 h-4 text-secondary shrink-0" />
+            <span>
+              Último respaldo generado:{' '}
+              <strong className="text-primary font-semibold">
+                {lastBackupAt ? new Date(lastBackupAt).toLocaleString('es-AR') : 'Sin registros previos en esta sesión'}
+              </strong>
+            </span>
+          </div>
+
           <div className="space-y-3">
-            <button
-              onClick={handleExportBackup}
-              className="w-full flex items-center justify-between p-3.5 bg-primary hover:bg-secondary text-on-primary font-bold rounded-xl transition-colors shadow-xs"
-            >
-              <div className="flex items-center gap-3">
-                <Database className="w-5 h-5 text-tertiary-fixed" />
-                <span>Generar Respaldo Completo (JSON)</span>
-              </div>
-              <Download className="w-4 h-4" />
-            </button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                onClick={() => handleExportBackup('download')}
+                className="w-full flex items-center justify-center gap-2 p-3 bg-primary hover:bg-secondary text-on-primary font-bold rounded-xl transition-colors shadow-xs text-body-md"
+              >
+                <Download className="w-4 h-4" />
+                <span>Generar Respaldo</span>
+              </button>
+
+              {canShareFile && (
+                <button
+                  onClick={() => handleExportBackup('share')}
+                  className="w-full flex items-center justify-center gap-2 p-3 bg-surface-container hover:bg-surface-container-high text-primary font-bold rounded-xl border border-outline-variant/40 transition-colors text-body-md"
+                >
+                  <Share2 className="w-4 h-4 text-secondary" />
+                  <span>Compartir Respaldo</span>
+                </button>
+              )}
+            </div>
 
             <div className="p-3.5 bg-amber-50/50 border border-amber-200 rounded-xl space-y-2">
               <div className="flex items-start gap-2 text-amber-900 text-body-md">
@@ -296,25 +424,45 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                 <div>
                   <span className="font-bold block">Restaurar Base de Datos desde JSON</span>
                   <span className="text-label-sm block text-amber-800">
-                    Sustituye la información actual por el contenido del respaldo cargado.
+                    Analiza y valida el archivo antes de modificar sus inversiones almacenadas.
                   </span>
                 </div>
               </div>
 
-              <label className="block w-full text-center bg-surface-container hover:bg-surface-container-high text-primary font-semibold py-2 px-4 rounded-lg cursor-pointer transition-colors text-body-md border border-outline-variant/40">
-                <span>{isRestoring ? 'Restaurando...' : 'Seleccionar Archivo JSON de Respaldo'}</span>
+              <label className="block w-full text-center bg-surface-container hover:bg-surface-container-high text-primary font-semibold py-2.5 px-4 rounded-lg cursor-pointer transition-colors text-body-md border border-outline-variant/40">
+                <span>Seleccionar Archivo JSON de Respaldo</span>
                 <input
                   type="file"
                   accept=".json"
-                  onChange={handleRestoreBackup}
-                  disabled={isRestoring}
+                  onChange={handleFileSelectForRestore}
                   className="hidden"
                 />
               </label>
             </div>
+
+            {/* Security notice */}
+            <div className="p-3 bg-surface-container-low rounded-xl border border-outline-variant/20 flex items-start gap-2 text-label-sm text-on-surface-variant">
+              <Lock className="w-4 h-4 text-secondary shrink-0 mt-0.5" />
+              <span>
+                <strong>Nota de Seguridad:</strong> Los archivos de respaldo JSON no están cifrados. Consérvelos en almacenamiento personal seguro (Google Drive, iCloud o disco local).
+              </span>
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Restore Confirmation Modal */}
+      <RestoreModal
+        isOpen={isRestoreModalOpen}
+        backupData={pendingBackupData}
+        validation={pendingValidation}
+        onClose={() => {
+          setIsRestoreModalOpen(false);
+          setPendingBackupData(null);
+          setPendingValidation(null);
+        }}
+        onConfirmRestore={handleConfirmRestoreFromModal}
+      />
     </div>
   );
 };

@@ -20,6 +20,7 @@ import { ReportsView } from './components/ReportsView';
 import { DepositFormModal } from './components/DepositFormModal';
 import { DetailModal } from './components/DetailModal';
 import { OperationalActionModal } from './components/OperationalActionModal';
+import { InstallPWAButton } from './components/InstallPWAButton';
 
 import { 
   LayoutDashboard, 
@@ -271,6 +272,10 @@ export function App() {
                 </button>
               );
             })}
+
+            <div className="pt-2">
+              <InstallPWAButton variant="sidebar" />
+            </div>
           </nav>
         </div>
 
