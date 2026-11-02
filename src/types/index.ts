@@ -60,11 +60,28 @@ export interface InvestmentEvent {
 }
 
 export interface BackupData {
-  version: number;
+  backupVersion?: number;
+  version?: number; // legacy backwards compatibility
+  appVersion?: string;
   exportedAt: string;
   deposits: FixedDeposit[];
   events: InvestmentEvent[];
   settings?: Record<string, any>;
+}
+
+export interface BackupValidationResult {
+  isValid: boolean;
+  errors: string[];
+  warnings: string[];
+  metadata: {
+    backupVersion: number;
+    appVersion: string;
+    exportedAt: string;
+    depositCount: number;
+    eventCount: number;
+    activeCapitalTotal: number;
+    banksCount: number;
+  };
 }
 
 export interface FinancialSummary {
